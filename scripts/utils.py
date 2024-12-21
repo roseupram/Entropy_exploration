@@ -1,6 +1,12 @@
 import numpy as np
 import math
+from sklearn.cluster import DBSCAN
 
+def cluster(data):
+    data=np.array(data)
+    result=DBSCAN(eps=10,min_samples=1).fit(data)
+    counter=np.bincount(result.labels_)
+    return counter
 def distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 

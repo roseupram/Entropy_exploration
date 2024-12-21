@@ -4,9 +4,10 @@ import cv2
 import numpy as np
 import tf as tranf
 import sensor_msgs.point_cloud2 as pc2
+import math
 from numpy import inf
-from utils import distance, orientation, diagonal_distance, PolarToCartesian
-from std_msgs.msg import Float32
+from utils import distance, orientation, diagonal_distance, PolarToCartesian,cluster
+from std_msgs.msg import Float32,ColorRGBA
 from sensor_msgs.msg import PointCloud2, LaserScan
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from nav_msgs.msg import Odometry, Path, OccupancyGrid
@@ -18,7 +19,6 @@ from collections import deque, defaultdict
 from copy import copy
 from itertools import permutations
 from dtw import dtw
-from belief import Belief_Map
 
 class Explorer:
     def __init__(self):
@@ -34,6 +34,7 @@ class Explorer:
         self.lamda_1 = 0.1
         self.lamda_2 = 0.3
         self.lamda_3 = 3
+        self.lamda_entropy=1
 
         self.k_size = 4
         self.su = 1
@@ -63,12 +64,12 @@ class Explorer:
         self.selected_subregion = 0
         self.optimal_global_path = []
         self.last_global_path = []
+        self.subregion_entropy={}
 
         self.h1_max = 5 # using for nomalization in heuristic function
         self.h2_max = 5
         self.h3_max = 10
 
-        self.belief_map = Belief_Map()
         # Odom data
         self.odom_x = 0
         self.odom_y = 0
@@ -105,6 +106,7 @@ class Explorer:
         
         self.subregions_pub = rospy.Publisher("/subregions", Marker, queue_size=1)
         self.selected_subregion_pub = rospy.Publisher("/selected_subregion", Marker, queue_size=1)
+        self.info_pub = rospy.Publisher("/info", Marker, queue_size=1)
         self.global_path_pub = rospy.Publisher("/global_path", Marker, queue_size=1)
         self.local_goal_pub = rospy.Publisher("/local_goal", Marker, queue_size=1)
         self.waypoint_pub = rospy.Publisher("/way_point", PointStamped, queue_size=1)
@@ -143,8 +145,6 @@ class Explorer:
                 cloud_dict[angle_bin] = radius
         
         self.laser_data = [cloud_dict[angle] if cloud_dict[angle] != float('inf') else self.range_max for angle in range(-180, 181)]
-        all_cells= self.belief_map.update(self.laser_data,[self.odom_x,self.odom_y],self.range_max)
-        print(1)
 
     def odom_callback(self, odom_data):
         self.odom_x = odom_data.pose.pose.position.x
@@ -356,16 +356,63 @@ class Explorer:
                         frontiers_in_subregion.append(frontier)
                 self.classflied_frontiers.append(frontiers_in_subregion)
     
+    def get_subregion_entropy(self,subregion_index):
+        subregion_width = self.map_width_resized / self.n_w
+        subregion_height = self.map_height_resized / self.n_h
+        x = subregion_index%self.n_w
+        y = subregion_index//self.n_h
+
+        map_orgin=(self.map_origin_x,self.map_origin_y)
+        start_pos=(x*subregion_width,y*subregion_height)
+        end_pos=((x+1)*subregion_width,(y+1)*subregion_height)
+        start_pos=tuple(start_pos[i]+map_orgin[i] for i in range(2))
+        end_pos=tuple(end_pos[i]+map_orgin[i] for i in range(2))
+
+        id_x_start, id_y_start = self.CoordToIndex(start_pos)
+        id_x_end, id_y_end     = self.CoordToIndex(end_pos)
+        area_width = (id_x_end-id_x_start)//3+1
+        area_height = (id_y_end-id_y_start)//3+1
+
+        Occupied,Free,Unknown=0,1,2
+        statistic=[[0,0,0] for i in range(9)] # occupied,free,Unknown
+
+        for k in range(id_y_start, id_y_end):
+            for j in range(id_x_start, id_x_end):
+                hi=(k-id_y_start)//area_height
+                wi=(j-id_x_start)//area_width
+                index = hi*3+wi%3
+                occupancy=self.map_data[k * self.map_width + j]
+                if occupancy >= 20:
+                    statistic[index][Occupied]+=1
+                elif occupancy >=0:
+                    statistic[index][Free]+=1
+                elif occupancy ==-1:
+                    statistic[index][Unknown]+=1
+        cluster_data=[]
+        for stat in statistic:
+            cell_num=sum(stat)
+            percent=[data/cell_num*100 for data in stat]
+            cluster_data.append(percent)
+        counter=cluster(cluster_data)
+        prob=counter/sum(counter)
+        entropy = sum([-p*math.log2(p) for p in prob])
+        return entropy
+
+
+
     # Arrange the access order of the subregions
     def arrangeSubregion(self):
         pair_lst = []
         if len(self.subregions) > 0:
             for i in range(len(self.subregions)):
                 subregion_idx = self.subregions[i]
+                entropy=self.get_subregion_entropy(subregion_idx)
+                self.subregion_entropy[subregion_idx]=entropy
                 # Distance between the robot and the center of the subregion
                 # Todo 1: The distance should be calculated by A* algorithm using the grid map
                 # Todo 2: Use the centroid of the frontiers within the subregion, instead of the center of the subregion
-                dist = distance([self.odom_x, self.odom_y], self.subregion_center[subregion_idx])
+                center = self.subregion_center[subregion_idx]
+                dist = distance([self.odom_x, self.odom_y], center)
                 dist_index_pair = (dist, subregion_idx)
                 pair_lst.append(dist_index_pair)
             
@@ -412,7 +459,9 @@ class Explorer:
                 else:
                     dtw_sim = 0
 
-                total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim)
+                first_index=option_arrangment[0]
+                entropy=self.subregion_entropy[first_index]
+                total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim+self.lamda_entropy*entropy)
 
                 if total_rev > best_rev:
                     best_rev = total_rev
@@ -820,6 +869,10 @@ class Explorer:
             position.y = self.map_origin_y_resized + int(index / self.n_w) * subregion_height + subregion_height / 2
             position.z = 0.75
             subregions.points.append(position)
+
+            text = self.subregion_entropy[index]
+            self.pub_subregion_info(position,index,f"E:{text:.2f}")
+
         self.subregions_pub.publish(subregions)
 
         # Publish marker for selected subregion
@@ -845,6 +898,21 @@ class Explorer:
         selected_subregion.pose.position.z = 0.75
         self.selected_subregion_pub.publish(selected_subregion)
     
+    def pub_subregion_info(self,position,index,string):
+        text=Marker()
+        text.header.frame_id="map"
+        text.header.stamp=rospy.Time.now()
+        text.ns="subregion_info"
+        text.id=index
+        text.type=Marker.TEXT_VIEW_FACING
+        text.action=Marker.ADD
+        text.pose.position=position
+        text.scale.z=1
+        text.color=ColorRGBA(0,0,0,1)
+        text.text=string
+        text.lifetime=rospy.Duration(5)
+        self.info_pub.publish(text)
+
     def drawGlobalPath(self):
         global_path = Marker()
         global_path.header.frame_id = "map"
