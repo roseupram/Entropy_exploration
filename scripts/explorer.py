@@ -65,6 +65,7 @@ class Explorer:
         self.optimal_global_path = []
         self.last_global_path = []
         self.subregion_entropy={}
+        self.frontier_entropy_pair=[]
 
         self.h1_max = 5 # using for nomalization in heuristic function
         self.h2_max = 5
@@ -173,10 +174,24 @@ class Explorer:
         waypoint.header.frame_id = 'map'
         waypoint.header.stamp = rospy.Time.now()
         waypoint.point.z = 0.75
+        local_dist = 1.5
+        path_len = len(path_poses)
+        sum_dist=0
+        select_index=-1
+        for i in range(1,path_len):
+            p1=path_poses[i-1].pose.position
+            p2=path_poses[i].pose.position
+            sum_dist+=distance([p1.x,p1.y],[p2.x,p2.y])
+            if sum_dist>local_dist:
+                select_index=i
+                break
 
-        if len(path_poses) > 15:
-            waypoint.point.x = path_poses[15].pose.position.x
-            waypoint.point.y = path_poses[15].pose.position.y
+
+
+
+        if select_index>0:
+            waypoint.point.x = path_poses[select_index].pose.position.x
+            waypoint.point.y = path_poses[select_index].pose.position.y
         else:
             waypoint.point.x = self.local_goal[0]
             waypoint.point.y = self.local_goal[1]
@@ -356,6 +371,17 @@ class Explorer:
                         frontiers_in_subregion.append(frontier)
                 self.classflied_frontiers.append(frontiers_in_subregion)
     
+    def get_frontier_entropy(self,frontier_xy):
+        local_w = self.map_width_resized / self.n_w/3
+        local_h = self.map_height_resized / self.n_h/3
+        local_size = [local_w,local_h]
+        
+        start_pos=tuple(frontier_xy[i]-local_size[i]/2 for i in range(2))
+        end_pos=tuple(frontier_xy[i]+local_size[i] for i in range(2))
+
+        id_x_start, id_y_start = self.CoordToIndex(start_pos)
+        id_x_end, id_y_end     = self.CoordToIndex(end_pos)
+        return self.get_area_entropy([id_x_start,id_y_start],[id_x_end,id_y_end])
     def get_subregion_entropy(self,subregion_index):
         subregion_width = self.map_width_resized / self.n_w
         subregion_height = self.map_height_resized / self.n_h
@@ -370,6 +396,11 @@ class Explorer:
 
         id_x_start, id_y_start = self.CoordToIndex(start_pos)
         id_x_end, id_y_end     = self.CoordToIndex(end_pos)
+        return self.get_area_entropy([id_x_start,id_y_start],[id_x_end,id_y_end])
+        
+    def get_area_entropy(self,start_xy,end_xy):
+        id_x_start, id_y_start = start_xy
+        id_x_end, id_y_end     = end_xy
         area_width = (id_x_end-id_x_start)//3+1
         area_height = (id_y_end-id_y_start)//3+1
 
@@ -391,8 +422,12 @@ class Explorer:
         cluster_data=[]
         for stat in statistic:
             cell_num=sum(stat)
+            if cell_num==0:
+                continue
             percent=[data/cell_num*100 for data in stat]
             cluster_data.append(percent)
+        if len(cluster_data)==0:
+            return 0
         counter=cluster(cluster_data)
         prob=counter/sum(counter)
         entropy = sum([-p*math.log2(p) for p in prob])
@@ -655,7 +690,7 @@ class Explorer:
                             obs_num += 1
                         if self.map_data[k * self.map_width + j] == -1:
                             unknow_num += 1
-                if obs_num >= 5 or unknow_num <= 1:
+                if obs_num >= 3 or unknow_num <= 1:
                     remove_bool = True
 
                 if remove_bool:
@@ -703,18 +738,21 @@ class Explorer:
         if (h3 > self.h3_max):
             self.h3_max = h3
 
+        entropy=self.get_frontier_entropy(frontier)
+        self.frontier_entropy_pair.append([frontier,entropy])
         # Normalization
         h1_normalized = (h1 - 0) / (self.h1_max - 0)
         h2_normalized = (h2 - 0) / (self.h2_max - 0)
         h3_normalized = (h3 - 0) / (self.h3_max - 0)
 
         h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized
-        return h
+        return h*np.exp(entropy)
 
     def selectLocalGoal(self):
         min_cost = inf
         local_goal = []
         if len(self.classflied_frontiers) > 0:
+            self.frontier_entropy_pair=[]
             frontiers_in_selected_subregion = self.classflied_frontiers[self.selected_subregion]
             for frontier in frontiers_in_selected_subregion:
                 cost = self.heurisitic(frontier)
@@ -841,6 +879,15 @@ class Explorer:
         local_goal.pose.position.z = 0.8
         self.local_goal_pub.publish(local_goal)
 
+        for i in range(len(self.frontier_entropy_pair)):
+            fe_pair=self.frontier_entropy_pair[i]
+            frontier,entropy=fe_pair
+            position = Point()
+            position.x = frontier[0]
+            position.y = frontier[1]-.5
+            position.z = 0.75
+            self.pub_info(position,i,f"E:{entropy:.2f}")
+
     def pubSubregionMarkers(self):
         # Publish marker for subregions
         subregions = Marker()
@@ -871,7 +918,7 @@ class Explorer:
             subregions.points.append(position)
 
             text = self.subregion_entropy[index]
-            self.pub_subregion_info(position,index,f"E:{text:.2f}")
+            # self.pub_info(position,index,f"E:{text:.2f}")
 
         self.subregions_pub.publish(subregions)
 
@@ -898,7 +945,7 @@ class Explorer:
         selected_subregion.pose.position.z = 0.75
         self.selected_subregion_pub.publish(selected_subregion)
     
-    def pub_subregion_info(self,position,index,string):
+    def pub_info(self,position,index,string):
         text=Marker()
         text.header.frame_id="map"
         text.header.stamp=rospy.Time.now()
