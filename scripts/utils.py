@@ -14,6 +14,8 @@ def orientation(x1, y1, x2, y2, angle):
     skew_x = x2 - x1
     skew_y = y2 - y1
     dot = skew_x * 1 + skew_y * 0
+    if dot==0:
+        return 0
     mag1 = math.sqrt(math.pow(skew_x, 2) + math.pow(skew_y, 2))
     mag2 = math.sqrt(math.pow(1, 2) + math.pow(0, 2))
     beta = math.acos(dot / (mag1 * mag2))

@@ -34,7 +34,7 @@ class Explorer:
         self.lamda_1 = 0.1
         self.lamda_2 = 0.3
         self.lamda_3 = 3
-        self.lamda_entropy=1
+        self.lamda_entropy=1 ###
 
         self.k_size = 4
         self.su = 1
@@ -42,7 +42,8 @@ class Explorer:
         self.so = 5
         self.gamma_1 = 0.8
         self.gamma_2 = 0.1
-        self.gamma_3 = 0.1
+        self.gamma_3 = 0.1 ###
+        self.use_frontier_entropy=True
 
         self.obs_dist_threshold = 0.2
         self.check_obs_radius = 0.4
@@ -148,8 +149,10 @@ class Explorer:
         self.laser_data = [cloud_dict[angle] if cloud_dict[angle] != float('inf') else self.range_max for angle in range(-180, 181)]
 
     def odom_callback(self, odom_data):
+        last_x,last_y=self.odom_x,self.odom_y
         self.odom_x = odom_data.pose.pose.position.x
         self.odom_y = odom_data.pose.pose.position.y
+        self.v_angle=math.atan2(self.odom_y-last_y,self.odom_x-last_x)
         quaternion = (
             odom_data.pose.pose.orientation.x,
             odom_data.pose.pose.orientation.y,
@@ -182,7 +185,6 @@ class Explorer:
             p1=path_poses[i-1].pose.position
             p2=path_poses[i].pose.position
             sum_dist+=distance([p1.x,p1.y],[p2.x,p2.y])
-            theta = orientation(p1.x, p1.y, p2.x, p2.y, self.angle)/math.pi*180
             if sum_dist>local_dist :
                 select_index=i
                 break
@@ -190,9 +192,9 @@ class Explorer:
         if select_index>1:
             p1=path_poses[select_index-1].pose.position
             p2=path_poses[select_index].pose.position
-            theta = orientation(p1.x, p1.y, p2.x, p2.y, self.angle)/math.pi*180
-            t=abs(abs(theta)-90)
-            if t<15:
+            radian=math.atan2(p2.y-p1.y,p2.x-p1.x)
+            theta = (radian- self.v_angle)/math.pi*180
+            if abs(theta)>90:
                 select_index=max(select_index//2,10)
             waypoint.point.x = path_poses[select_index].pose.position.x
             waypoint.point.y = path_poses[select_index].pose.position.y
@@ -742,8 +744,10 @@ class Explorer:
         if (h3 > self.h3_max):
             self.h3_max = h3
 
-        entropy=self.get_frontier_entropy(frontier)
-        self.frontier_entropy_pair.append([frontier,entropy])
+        entropy=0
+        if self.use_frontier_entropy:
+            entropy=self.get_frontier_entropy(frontier)
+            self.frontier_entropy_pair.append([frontier,entropy])
         # Normalization
         h1_normalized = (h1 - 0) / (self.h1_max - 0)
         h2_normalized = (h2 - 0) / (self.h2_max - 0)
