@@ -182,14 +182,18 @@ class Explorer:
             p1=path_poses[i-1].pose.position
             p2=path_poses[i].pose.position
             sum_dist+=distance([p1.x,p1.y],[p2.x,p2.y])
-            if sum_dist>local_dist:
+            theta = orientation(p1.x, p1.y, p2.x, p2.y, self.angle)/math.pi*180
+            if sum_dist>local_dist :
                 select_index=i
                 break
 
-
-
-
-        if select_index>0:
+        if select_index>1:
+            p1=path_poses[select_index-1].pose.position
+            p2=path_poses[select_index].pose.position
+            theta = orientation(p1.x, p1.y, p2.x, p2.y, self.angle)/math.pi*180
+            t=abs(abs(theta)-90)
+            if t<15:
+                select_index=max(select_index//2,10)
             waypoint.point.x = path_poses[select_index].pose.position.x
             waypoint.point.y = path_poses[select_index].pose.position.y
         else:
