@@ -71,6 +71,7 @@ class Explorer:
         self.h1_max = 5 # using for nomalization in heuristic function
         self.h2_max = 5
         self.h3_max = 10
+        self.entropy_max=3
 
         # Odom data
         self.odom_x = 0
@@ -474,6 +475,7 @@ class Explorer:
                 # Calculate the revenue of an optional arangement of subregions
                 total_rev = 0
                 cumulative_dist = 0
+                cumulative_entropy=0
                 for j in range(len(option_arrangment)):
                     cur_idx = option_arrangment[j]
 
@@ -484,7 +486,9 @@ class Explorer:
                         dist = distance(self.subregion_center[last_idx], self.subregion_center[cur_idx])
                         
                     cumulative_dist += dist
-                    rev = np.exp(-self.lamda_1 * cumulative_dist)
+                    entropy=self.subregion_entropy[cur_idx]
+                    cumulative_entropy+=entropy
+                    rev = np.exp(-self.lamda_1 * cumulative_dist+self.lamda_entropy*cumulative_entropy)
                     total_rev += rev
 
                 # Calculate DTW similarity between the last path sequence and the current path sequence
@@ -500,9 +504,7 @@ class Explorer:
                 else:
                     dtw_sim = 0
 
-                first_index=option_arrangment[0]
-                entropy=self.subregion_entropy[first_index]
-                total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim+self.lamda_entropy*entropy)
+                total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim)
 
                 if total_rev > best_rev:
                     best_rev = total_rev
@@ -748,13 +750,16 @@ class Explorer:
         if self.use_frontier_entropy:
             entropy=self.get_frontier_entropy(frontier)
             self.frontier_entropy_pair.append([frontier,entropy])
+            if entropy>self.entropy_max:
+                self.entropy_max=entropy
         # Normalization
         h1_normalized = (h1 - 0) / (self.h1_max - 0)
         h2_normalized = (h2 - 0) / (self.h2_max - 0)
         h3_normalized = (h3 - 0) / (self.h3_max - 0)
+        entropy_normalized=entropy/self.entropy_max
 
-        h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized
-        return h*np.exp(entropy)
+        h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized+ entropy_normalized
+        return h
 
     def selectLocalGoal(self):
         min_cost = inf
