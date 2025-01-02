@@ -34,7 +34,7 @@ class Explorer:
         self.lamda_1 = 0.1
         self.lamda_2 = 0.3
         self.lamda_3 = 3
-        self.lamda_entropy=1 ###
+        self.lamda_entropy=0 ###
 
         self.k_size = 4
         self.su = 1
@@ -43,7 +43,7 @@ class Explorer:
         self.gamma_1 = 0.8
         self.gamma_2 = 0.1
         self.gamma_3 = 0.1 ###
-        self.use_frontier_entropy=True
+        self.use_frontier_entropy=False
 
         self.obs_dist_threshold = 0.2
         self.check_obs_radius = 0.4
@@ -174,12 +174,12 @@ class Explorer:
     def path_callback(self, path_data):
         # Receive the global path and send to the cmu planner
         path_poses = path_data.poses
+        path_len = len(path_poses)
         waypoint = PointStamped()
         waypoint.header.frame_id = 'map'
         waypoint.header.stamp = rospy.Time.now()
         waypoint.point.z = 0.75
         local_dist = 1.5
-        path_len = len(path_poses)
         sum_dist=0
         select_index=-1
         for i in range(1,path_len):
@@ -504,7 +504,10 @@ class Explorer:
                 else:
                     dtw_sim = 0
 
-                total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim)
+                first_index=option_arrangment[0]
+                first_entropy=self.subregion_entropy[first_index]
+                total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim + first_entropy)
+                # total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim)
 
                 if total_rev > best_rev:
                     best_rev = total_rev
@@ -688,6 +691,7 @@ class Explorer:
                 # Remove frontiers that are too close to obstacles
                 obs_num = 0
                 unknow_num = 0
+                free_num=0
                 check_radius = 0.6
 
                 id_x_start, id_y_start = self.CoordToIndex([self.total_frontiers[i][0] - check_radius, self.total_frontiers[i][1] - check_radius])
@@ -696,9 +700,11 @@ class Explorer:
                     for j in range(id_x_start, id_x_end):
                         if self.map_data[k * self.map_width + j] >= 1:
                             obs_num += 1
-                        if self.map_data[k * self.map_width + j] == -1:
+                        elif self.map_data[k * self.map_width + j] == -1:
                             unknow_num += 1
-                if obs_num >= 3 or unknow_num <= 1:
+                        else:
+                            free_num+=1
+                if obs_num >= 3 or unknow_num <= 1 or free_num<4:
                     remove_bool = True
 
                 if remove_bool:
@@ -758,8 +764,10 @@ class Explorer:
         h3_normalized = (h3 - 0) / (self.h3_max - 0)
         entropy_normalized=entropy/self.entropy_max
 
-        h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized+ entropy_normalized
+        # h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized+ entropy_normalized
+        h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized
         return h
+        # return h
 
     def selectLocalGoal(self):
         min_cost = inf
@@ -1020,6 +1028,7 @@ class Explorer:
             if num_frontiers == 0:
                 print('no more frontiers, end exploration!')
                 self.end_exploration = True
+                rospy.signal_shutdown("end explore")
 
         # Publish markers for visualization
         self.pubFrontierMarkers()
