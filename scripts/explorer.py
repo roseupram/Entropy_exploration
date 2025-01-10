@@ -34,7 +34,7 @@ class Explorer:
         self.lamda_1 = 0.3 #dist
         self.lamda_2 = 0.1 #dtw
         self.lamda_3 = 3
-        self.lamda_entropy=0 ###
+        self.lamda_entropy=1 ###
 
         self.k_size = 4
         self.su = 1
