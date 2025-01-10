@@ -31,8 +31,8 @@ class Explorer:
         self.img_frontier_vicinity = 0.5
         self.total_frontier_vicinity = 1.5
 
-        self.lamda_1 = 0.1
-        self.lamda_2 = 0.3
+        self.lamda_1 = 0.3 #dist
+        self.lamda_2 = 0.1 #dtw
         self.lamda_3 = 3
         self.lamda_entropy=0 ###
 
@@ -66,7 +66,7 @@ class Explorer:
         self.optimal_global_path = []
         self.last_global_path = []
         self.subregion_entropy={}
-        self.frontier_entropy_pair=[]
+        self.pos_text_pair=[]
 
         self.h1_max = 5 # using for nomalization in heuristic function
         self.h2_max = 5
@@ -108,13 +108,13 @@ class Explorer:
         self.inf_frontiers_pub = rospy.Publisher("/inf_frontiers", Marker, queue_size=1)
         
         self.subregions_pub = rospy.Publisher("/subregions", Marker, queue_size=1)
+        self.subregion_path_pub = rospy.Publisher("/subregion_path", Marker, queue_size=1)
         self.selected_subregion_pub = rospy.Publisher("/selected_subregion", Marker, queue_size=1)
         self.info_pub = rospy.Publisher("/info", Marker, queue_size=1)
         self.global_path_pub = rospy.Publisher("/global_path", Marker, queue_size=1)
         self.local_goal_pub = rospy.Publisher("/local_goal", Marker, queue_size=1)
         self.waypoint_pub = rospy.Publisher("/way_point", PointStamped, queue_size=1)
         self.runtime_pub = rospy.Publisher("/runtime", Float32, queue_size=1)
-        self.belief_pub = rospy.Publisher("/belief", PointCloud2, queue_size=1)
         
         # Subscriber
         self.cloud_sub = rospy.Subscriber("/sensor_scan", PointCloud2, self.cloud_callback)
@@ -171,6 +171,16 @@ class Explorer:
         self.map_origin_y = map_data.info.origin.position.y
         self.resizeMap()
 
+    def find_path_at_distance(self,poses,max_distance):
+        sum_dist=0
+        path_len = len(poses)
+        for i in range(1,path_len):
+            p1=poses[i-1].pose.position
+            p2=poses[i].pose.position
+            sum_dist+=distance([p1.x,p1.y],[p2.x,p2.y])
+            if sum_dist>max_distance :
+                return i
+        return -1
     def path_callback(self, path_data):
         # Receive the global path and send to the cmu planner
         path_poses = path_data.poses
@@ -180,19 +190,15 @@ class Explorer:
         waypoint.header.stamp = rospy.Time.now()
         waypoint.point.z = 0.75
         local_dist = 1.5
-        sum_dist=0
-        select_index=-1
-        for i in range(1,path_len):
-            p1=path_poses[i-1].pose.position
-            p2=path_poses[i].pose.position
-            sum_dist+=distance([p1.x,p1.y],[p2.x,p2.y])
-            if sum_dist>local_dist :
-                select_index=i
-                break
+        select_index=self.find_path_at_distance(path_poses,local_dist)
 
         if select_index>1:
             p1=path_poses[select_index-1].pose.position
             p2=path_poses[select_index].pose.position
+            line_dist = distance([self.odom_x,self.odom_y],[p2.x,p2.y])
+            t=max((line_dist/local_dist)**0.5,1/3)
+            select_index=self.find_path_at_distance(path_poses,t*local_dist)
+
             radian=math.atan2(p2.y-p1.y,p2.x-p1.x)
             theta = (radian- self.v_angle)/math.pi*180
             if abs(theta)>90:
@@ -446,15 +452,24 @@ class Explorer:
     def arrangeSubregion(self):
         pair_lst = []
         if len(self.subregions) > 0:
+            max_entropy = 0
             for i in range(len(self.subregions)):
                 subregion_idx = self.subregions[i]
+                center = self.subregion_center[subregion_idx]
+                dist = distance([self.odom_x, self.odom_y], center)
+
+                # entropy=self.get_subregion_entropy(subregion_idx)/dist
+                is_robot_inside = self.isInside(center,[self.odom_x,self.odom_y])
                 entropy=self.get_subregion_entropy(subregion_idx)
+                if entropy>max_entropy:
+                    max_entropy=entropy
+                if is_robot_inside:
+                    entropy+=2
                 self.subregion_entropy[subregion_idx]=entropy
+
                 # Distance between the robot and the center of the subregion
                 # Todo 1: The distance should be calculated by A* algorithm using the grid map
                 # Todo 2: Use the centroid of the frontiers within the subregion, instead of the center of the subregion
-                center = self.subregion_center[subregion_idx]
-                dist = distance([self.odom_x, self.odom_y], center)
                 dist_index_pair = (dist, subregion_idx)
                 pair_lst.append(dist_index_pair)
             
@@ -470,12 +485,18 @@ class Explorer:
             # Todo 3: Use heuristic algorithm to optimize the arrangement, instead of the brute force method
             permutations_lst = list(permutations(top_indices, len(top_indices)))
             best_rev = -inf
+            region_info={}
+            for i in top_indices:
+                region_info[i]=dict(
+                    max_value=0,
+                    center=self.subregion_center[i],
+                    index=i
+                )
             for i in range(len(permutations_lst)):
                 option_arrangment = permutations_lst[i]
                 # Calculate the revenue of an optional arangement of subregions
                 total_rev = 0
                 cumulative_dist = 0
-                cumulative_entropy=0
                 for j in range(len(option_arrangment)):
                     cur_idx = option_arrangment[j]
 
@@ -486,9 +507,7 @@ class Explorer:
                         dist = distance(self.subregion_center[last_idx], self.subregion_center[cur_idx])
                         
                     cumulative_dist += dist
-                    entropy=self.subregion_entropy[cur_idx]
-                    cumulative_entropy+=entropy
-                    rev = np.exp(-self.lamda_1 * cumulative_dist+self.lamda_entropy*cumulative_entropy)
+                    rev = np.exp(-self.lamda_1 * cumulative_dist)
                     total_rev += rev
 
                 # Calculate DTW similarity between the last path sequence and the current path sequence
@@ -505,9 +524,23 @@ class Explorer:
                     dtw_sim = 0
 
                 first_index=option_arrangment[0]
+                center = self.subregion_center[first_index]
+                angle=math.atan2(center[1]-self.odom_y,center[0]-self.odom_x)
                 first_entropy=self.subregion_entropy[first_index]
-                total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim + first_entropy)
-                # total_rev = total_rev * np.exp(-self.lamda_2 * dtw_sim)
+
+                dist_value=total_rev
+                entropy_value=np.exp(self.lamda_entropy* first_entropy)
+                # entropy_value=self.lamda_entropy*first_entropy/max_entropy+1
+                dtw_value= np.exp(-self.lamda_2 * dtw_sim)
+                total_rev = total_rev * dtw_value*entropy_value
+
+                info_dict = region_info[first_index]
+                if info_dict['max_value']<total_rev:
+                    info_dict['max_value']=total_rev
+                    info_dict['path']=option_arrangment
+                    info_dict['all_values']=[dist_value,dtw_value,entropy_value]
+                # rotate_value=np.exp(-abs(self.v_angle-angle)*0.1) if not self.isInside(center,[self.odom_x,self.odom_y]) else 1
+                # total_rev = total_rev * dtw_value
 
                 if total_rev > best_rev:
                     best_rev = total_rev
@@ -515,6 +548,11 @@ class Explorer:
 
             self.selected_subregion = self.optimal_global_path[0]
             self.last_global_path = self.optimal_global_path
+            for k,v in region_info.items():
+                values=','.join(f"{x:.2f}" for x in v['all_values'])
+                text = f"{v['max_value']:.5f} = {values}"
+                self.pos_text_pair.append([v['center'],text,v['index']])
+
     ## ------------------------------------------------------------------------- ##
 
     ## --------------------Hybrid Frontiers Sampling Module-------------------- ##
@@ -704,7 +742,7 @@ class Explorer:
                             unknow_num += 1
                         else:
                             free_num+=1
-                if obs_num >= 3 or unknow_num <= 1 or free_num<4:
+                if obs_num >= 1 or unknow_num <= 1 or free_num<2:
                     remove_bool = True
 
                 if remove_bool:
@@ -755,7 +793,7 @@ class Explorer:
         entropy=0
         if self.use_frontier_entropy:
             entropy=self.get_frontier_entropy(frontier)
-            self.frontier_entropy_pair.append([frontier,entropy])
+            self.pos_text_pair.append([frontier,entropy])
             if entropy>self.entropy_max:
                 self.entropy_max=entropy
         # Normalization
@@ -773,7 +811,6 @@ class Explorer:
         min_cost = inf
         local_goal = []
         if len(self.classflied_frontiers) > 0:
-            self.frontier_entropy_pair=[]
             frontiers_in_selected_subregion = self.classflied_frontiers[self.selected_subregion]
             for frontier in frontiers_in_selected_subregion:
                 cost = self.heurisitic(frontier)
@@ -810,10 +847,10 @@ class Explorer:
         total_frontiers.color.b = 1.0
         total_frontiers.pose.orientation.w = 1.0
 
-        for frontier in self.total_frontiers:
+        for pos in self.total_frontiers:
             p = Point()
-            p.x = frontier[0]
-            p.y = frontier[1]
+            p.x = pos[0]
+            p.y = pos[1]
             p.z = 0.75
             total_frontiers.points.append(p)
         self.total_frontiers_pub.publish(total_frontiers)
@@ -832,10 +869,10 @@ class Explorer:
         gap_frontiers.color.b = 0.0
         gap_frontiers.pose.orientation.w = 1.0
 
-        for frontier in self.gap_frontiers:
+        for pos in self.gap_frontiers:
             p = Point()
-            p.x = frontier[0]
-            p.y = frontier[1]
+            p.x = pos[0]
+            p.y = pos[1]
             p.z = 0.75
             gap_frontiers.points.append(p)
         self.gap_frontiers_pub.publish(gap_frontiers)
@@ -853,10 +890,10 @@ class Explorer:
         img_frontiers.color.g = 1.0
         img_frontiers.color.b = 0.0
         img_frontiers.pose.orientation.w = 1.0
-        for frontier in self.img_frontiers:
+        for pos in self.img_frontiers:
             p = Point()
-            p.x = frontier[0]
-            p.y = frontier[1]
+            p.x = pos[0]
+            p.y = pos[1]
             p.z = 0.75
             img_frontiers.points.append(p)
         self.img_frontiers_pub.publish(img_frontiers)
@@ -874,10 +911,10 @@ class Explorer:
         inf_frontiers.color.g = 0.5
         inf_frontiers.color.b = 0.5
         inf_frontiers.pose.orientation.w = 1.0
-        for frontier in self.inf_frontiers:
+        for pos in self.inf_frontiers:
             p = Point()
-            p.x = frontier[0]
-            p.y = frontier[1]
+            p.x = pos[0]
+            p.y = pos[1]
             p.z = 0.75
             inf_frontiers.points.append(p)
         self.inf_frontiers_pub.publish(inf_frontiers)
@@ -900,14 +937,16 @@ class Explorer:
         local_goal.pose.position.z = 0.8
         self.local_goal_pub.publish(local_goal)
 
-        for i in range(len(self.frontier_entropy_pair)):
-            fe_pair=self.frontier_entropy_pair[i]
-            frontier,entropy=fe_pair
+        for i in range(len(self.pos_text_pair)):
+            pose_text=self.pos_text_pair[i]
+            pos,text,index=pose_text
             position = Point()
-            position.x = frontier[0]
-            position.y = frontier[1]-.5
+            position.x = pos[0]
+            position.y = pos[1]-.5
             position.z = 0.75
-            self.pub_info(position,i,f"E:{entropy:.2f}")
+            self.pub_info(position,index,text)
+
+        self.pos_text_pair=[]
 
     def pubSubregionMarkers(self):
         # Publish marker for subregions
@@ -965,6 +1004,25 @@ class Explorer:
         selected_subregion.pose.position.y = self.map_origin_y_resized + int(self.selected_subregion / self.n_w) * subregion_height + subregion_height / 2
         selected_subregion.pose.position.z = 0.75
         self.selected_subregion_pub.publish(selected_subregion)
+
+        subregion_path=Marker()
+        subregion_path.header.frame_id="map"
+        subregion_path.header.stamp=rospy.Time.now()
+        subregion_path.ns="subregion_path"
+        subregion_path.type=subregion_path.LINE_STRIP
+        subregion_path.action=subregion_path.ADD
+        subregion_path.pose.orientation.w=1
+        subregion_path.scale.x=0.5
+        subregion_path.color.r=1
+        subregion_path.color.g=1
+        subregion_path.color.b=0
+        subregion_path.color.a=1
+        for index in self.optimal_global_path:
+            center=self.subregion_center[index]
+            p=Point(center[0],center[1],0)
+            subregion_path.points.append(p)
+        self.subregion_path_pub.publish(subregion_path)
+
     
     def pub_info(self,position,index,string):
         text=Marker()
@@ -975,10 +1033,10 @@ class Explorer:
         text.type=Marker.TEXT_VIEW_FACING
         text.action=Marker.ADD
         text.pose.position=position
-        text.scale.z=1
+        text.scale.z=.5
         text.color=ColorRGBA(0,0,0,1)
         text.text=string
-        text.lifetime=rospy.Duration(5)
+        text.lifetime=rospy.Duration()
         self.info_pub.publish(text)
 
     def drawGlobalPath(self):
