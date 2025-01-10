@@ -43,6 +43,7 @@ class Explorer:
         self.gamma_1 = 0.8
         self.gamma_2 = 0.1
         self.gamma_3 = 0.1 ###
+        self.gamma_gcom=0.5
         self.use_frontier_entropy=False
 
         self.obs_dist_threshold = 0.2
@@ -72,6 +73,7 @@ class Explorer:
         self.h2_max = 5
         self.h3_max = 10
         self.entropy_max=3
+        self.gcom_max=5
 
         # Odom data
         self.odom_x = 0
@@ -551,7 +553,7 @@ class Explorer:
             for k,v in region_info.items():
                 values=','.join(f"{x:.2f}" for x in v['all_values'])
                 text = f"{v['max_value']:.5f} = {values}"
-                self.pos_text_pair.append([v['center'],text,v['index']])
+                # self.pos_text_pair.append([v['center'],text,v['index']])
 
     ## ------------------------------------------------------------------------- ##
 
@@ -796,24 +798,34 @@ class Explorer:
             self.pos_text_pair.append([frontier,entropy])
             if entropy>self.entropy_max:
                 self.entropy_max=entropy
-        # Normalization
-        h1_normalized = (h1 - 0) / (self.h1_max - 0)
-        h2_normalized = (h2 - 0) / (self.h2_max - 0)
-        h3_normalized = (h3 - 0) / (self.h3_max - 0)
-        entropy_normalized=entropy/self.entropy_max
+        gcom=0
+        if len(self.optimal_global_path)>1:
+            next_region_index=self.optimal_global_path[1]
+            next_region_center=self.subregion_center[next_region_index]
+            gcom=distance(frontier,next_region_center)
+            self.gcom_max=max(self.gcom_max,gcom)
 
-        # h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized+ entropy_normalized
-        h = self.gamma_1 * h1_normalized  + self.gamma_2 * h2_normalized + self.gamma_3 * h3_normalized
-        return h
-        # return h
+        # Normalization
+        h1_normalized = self.gamma_1*(h1 - 0) / (self.h1_max - 0)
+        h2_normalized = self.gamma_2*(h2 - 0) / (self.h2_max - 0)
+        h3_normalized = self.gamma_3*(h3 - 0) / (self.h3_max - 0)
+        entropy_normalized=entropy/self.entropy_max
+        gcom_normalized=self.gamma_gcom*(1-gcom/self.gcom_max)
+        all_cost=[h1_normalized,h2_normalized,h3_normalized,gcom_normalized]
+        h =  h1_normalized  +  h2_normalized +  h3_normalized+gcom_normalized
+        return h,all_cost
 
     def selectLocalGoal(self):
         min_cost = inf
         local_goal = []
         if len(self.classflied_frontiers) > 0:
             frontiers_in_selected_subregion = self.classflied_frontiers[self.selected_subregion]
+            i=0
             for frontier in frontiers_in_selected_subregion:
-                cost = self.heurisitic(frontier)
+                cost,all_cost = self.heurisitic(frontier)
+                text=f"{cost:.2f}="+",".join(f"{x:.2f}" for x in all_cost)
+                self.pos_text_pair.append([frontier,text,i,"frontier"])
+                i+=1
                 if cost < min_cost:
                     min_cost = cost
                     local_goal = frontier
@@ -939,12 +951,12 @@ class Explorer:
 
         for i in range(len(self.pos_text_pair)):
             pose_text=self.pos_text_pair[i]
-            pos,text,index=pose_text
+            pos,text,index,ns=pose_text
             position = Point()
             position.x = pos[0]
             position.y = pos[1]-.5
             position.z = 0.75
-            self.pub_info(position,index,text)
+            self.pub_info(position,index,text,ns)
 
         self.pos_text_pair=[]
 
@@ -1024,11 +1036,11 @@ class Explorer:
         self.subregion_path_pub.publish(subregion_path)
 
     
-    def pub_info(self,position,index,string):
+    def pub_info(self,position,index,string,ns="info"):
         text=Marker()
         text.header.frame_id="map"
         text.header.stamp=rospy.Time.now()
-        text.ns="subregion_info"
+        text.ns=ns
         text.id=index
         text.type=Marker.TEXT_VIEW_FACING
         text.action=Marker.ADD
