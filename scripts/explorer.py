@@ -43,7 +43,7 @@ class Explorer:
         self.gamma_1 = 0.8
         self.gamma_2 = 0.1
         self.gamma_3 = 0.1 ###
-        self.gamma_gcom=0.5
+        self.gamma_gcom=1.0
         self.use_frontier_entropy=False
 
         self.obs_dist_threshold = 0.2
