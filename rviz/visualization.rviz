@@ -6,6 +6,7 @@ Panels:
       Expanded:
         - /HPHS1
         - /HPHS1/Global Path1
+        - /HPHS1/Global Path1/Namespaces1
         - /HPHS1/info1
         - /LRAE1
       Splitter Ratio: 0.5767441987991333
@@ -109,8 +110,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 2.439873695373535
-        Min Value: -0.04223978519439697
+        Max Value: 2.4607365131378174
+        Min Value: -0.04376375675201416
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -233,7 +234,8 @@ Visualization Manager:
           Marker Topic: /subregion_path
           Name: Global Path
           Namespaces:
-            subregion_path: true
+            local_path: true
+            subregion_path: false
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
@@ -241,7 +243,7 @@ Visualization Manager:
           Marker Topic: /info
           Name: info
           Namespaces:
-            frontier: true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -361,5 +363,5 @@ Window Geometry:
   Views:
     collapsed: true
   Width: 1908
-  X: 2560
-  Y: 0
+  X: 2528
+  Y: -32

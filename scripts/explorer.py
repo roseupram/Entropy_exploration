@@ -11,8 +11,9 @@ from std_msgs.msg import Float32,ColorRGBA
 from sensor_msgs.msg import PointCloud2, LaserScan
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from nav_msgs.msg import Odometry, Path, OccupancyGrid
+from nav_msgs.srv import GetPlan
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point, PointStamped
+from geometry_msgs.msg import Point, PointStamped,PoseStamped
 from tf.transformations import euler_from_quaternion
 from pyquaternion import Quaternion
 from collections import deque, defaultdict
@@ -100,9 +101,12 @@ class Explorer:
         self.img_frontiers   = deque()
 
         self.local_goal = [0, 0]
+        self.local_path=[]
         self.end_exploration = False
 
         rospy.init_node("exploration")
+        rospy.wait_for_service("/move_base/make_plan")
+        self.plan_srv=rospy.ServiceProxy('/move_base/make_plan',GetPlan)
         # Publisher
         self.total_frontiers_pub = rospy.Publisher("/total_frontiers", Marker, queue_size=1)
         self.gap_frontiers_pub = rospy.Publisher("/gap_frontiers", Marker, queue_size=1)
@@ -553,7 +557,7 @@ class Explorer:
             for k,v in region_info.items():
                 values=','.join(f"{x:.2f}" for x in v['all_values'])
                 text = f"{v['max_value']:.5f} = {values}"
-                # self.pos_text_pair.append([v['center'],text,v['index']])
+                self.pos_text_pair.append([v['center'],text,v['index']])
 
     ## ------------------------------------------------------------------------- ##
 
@@ -814,22 +818,73 @@ class Explorer:
         all_cost=[h1_normalized,h2_normalized,h3_normalized,gcom_normalized]
         h =  h1_normalized  +  h2_normalized +  h3_normalized+gcom_normalized
         return h,all_cost
-
+    def get_path_of_2points(self,p1,p2):
+        start=PoseStamped()
+        goal=PoseStamped()
+        start.header.frame_id="map"
+        goal.header.frame_id="map"
+        start.pose.orientation.w=1
+        goal.pose.orientation.w=1
+        start.pose.position=Point(p1[0],p1[1],0)
+        goal.pose.position=Point(p2[0],p2[1],0)
+        plan = self.plan_srv(start=start,goal=goal,tolerance=0.5).plan
+        return plan.poses
+    def get_dist_matrix(self,path):
+        # record runtime
+        matrix=[]
+        num=len(path)
+        if num==1:
+            return [[0]]
+        for i in  range(num):
+            matrix.append([0]*num)
+        for i in range(num):
+            for j in range(i+1,num):
+                dist=0
+                poses=self.get_path_of_2points(path[i],path[j])
+                for k in range(1,len(poses)):
+                    p1,p2=poses[k-1].pose.position,poses[k].pose.position
+                    dist+=distance([p1.x,p1.y],[p2.x,p2.y])
+                matrix[i][j]=dist
+        for i in range(num):
+            for j in range(0,i):
+                matrix[i][j]=matrix[j][i]
+        return matrix
     def selectLocalGoal(self):
+
+        if len(self.classflied_frontiers) <= 0:
+            return
+
         min_cost = inf
         local_goal = []
-        if len(self.classflied_frontiers) > 0:
-            frontiers_in_selected_subregion = self.classflied_frontiers[self.selected_subregion]
-            i=0
-            for frontier in frontiers_in_selected_subregion:
-                cost,all_cost = self.heurisitic(frontier)
-                text=f"{cost:.2f}="+",".join(f"{x:.2f}" for x in all_cost)
-                self.pos_text_pair.append([frontier,text,i,"frontier"])
-                i+=1
-                if cost < min_cost:
-                    min_cost = cost
-                    local_goal = frontier
-            self.local_goal = local_goal
+        frontiers_in_selected_subregion = self.classflied_frontiers[self.selected_subregion]
+        robot_xy=[self.odom_x,self.odom_y]
+        use_local_path=False
+        if use_local_path:
+            frontiers_num=len(frontiers_in_selected_subregion)
+            dist_matrix=self.get_dist_matrix(frontiers_in_selected_subregion)
+            perm=permutations(range(frontiers_num))
+            for path_index in perm:
+                path=[frontiers_in_selected_subregion[i] for i in path_index]
+                path_dist=distance(robot_xy,path[0])
+                for i in range(1,len(path)):
+                    path_dist+=dist_matrix[i-1][i]
+                if path_dist<min_cost:
+                    min_cost=path_dist
+                    local_goal=path[0]
+                    self.local_path=path
+            self.local_goal=local_goal
+            return
+
+        i=0
+        for frontier in frontiers_in_selected_subregion:
+            cost,all_cost = self.heurisitic(frontier)
+            text=f"{cost:.2f}="+",".join(f"{x:.2f}" for x in all_cost)
+            # self.pos_text_pair.append([frontier,text,i,"frontier"])
+            i+=1
+            if cost < min_cost:
+                min_cost = cost
+                local_goal = frontier
+        self.local_goal = local_goal
 
     def sendLocalGoal(self):
         goal = MoveBaseGoal()
@@ -989,9 +1044,6 @@ class Explorer:
             position.z = 0.75
             subregions.points.append(position)
 
-            text = self.subregion_entropy[index]
-            # self.pub_info(position,index,f"E:{text:.2f}")
-
         self.subregions_pub.publish(subregions)
 
         # Publish marker for selected subregion
@@ -1035,7 +1087,13 @@ class Explorer:
             subregion_path.points.append(p)
         self.subregion_path_pub.publish(subregion_path)
 
-    
+        subregion_path.ns="local_path"
+        subregion_path.scale.x=0.2
+        subregion_path.points.clear()
+        for point in self.local_path:
+            p=Point(point[0],point[1],0)
+            subregion_path.points.append(p)
+        self.subregion_path_pub.publish(subregion_path)
     def pub_info(self,position,index,string,ns="info"):
         text=Marker()
         text.header.frame_id="map"
@@ -1048,7 +1106,7 @@ class Explorer:
         text.scale.z=.5
         text.color=ColorRGBA(0,0,0,1)
         text.text=string
-        text.lifetime=rospy.Duration()
+        text.lifetime=rospy.Duration(5)
         self.info_pub.publish(text)
 
     def drawGlobalPath(self):
