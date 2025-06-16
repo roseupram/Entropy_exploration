@@ -1,7 +1,7 @@
 <launch>
 
     <arg name="world_name" default="office"/> <!--office, maze, indoor_1, indoor_2-->
-    <arg name="vehicleHeight" default="0.75"/>
+    <arg name="vehicleHeight" default="0.45"/>
     <arg name="cameraOffsetZ" default="0"/>
     <arg name="vehicleX" default="0"/>
     <arg name="vehicleY" default="0"/>

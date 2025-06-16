@@ -31,11 +31,12 @@ class Explorer:
         self.inf_frontier_vicinity = 2.0
         self.img_frontier_vicinity = 0.5
         self.total_frontier_vicinity = 1.5
-
-        self.lamda_1 = 0.3 #dist
+        #hphs dist=0.1, dtw=0.3, lambda_3=3
+        #ours dist=0.3, dtw=0.1, lambda_3=1
+        self.lamda_1 = 0.3 #dist 
         self.lamda_2 = 0.1 #dtw
-        self.lamda_3 = 3
-        self.lamda_entropy=1 ###
+        self.lamda_3 = 1 #
+        self.lamda_entropy=1.0 ###
 
         self.k_size = 4
         self.su = 1
@@ -43,8 +44,9 @@ class Explorer:
         self.so = 5
         self.gamma_1 = 0.8
         self.gamma_2 = 0.1
-        self.gamma_3 = 0.1 ###
-        self.gamma_gcom=1.0
+        self.gamma_3 = 0.1 
+        self.gamma_gcom=self.lamda_entropy ###
+
         self.use_frontier_entropy=False
 
         self.obs_dist_threshold = 0.2
@@ -513,6 +515,7 @@ class Explorer:
                         dist = distance(self.subregion_center[last_idx], self.subregion_center[cur_idx])
                         
                     cumulative_dist += dist
+                    # TODO rev = cumulative_dist 
                     rev = np.exp(-self.lamda_1 * cumulative_dist)
                     total_rev += rev
 
@@ -557,7 +560,7 @@ class Explorer:
             for k,v in region_info.items():
                 values=','.join(f"{x:.2f}" for x in v['all_values'])
                 text = f"{v['max_value']:.5f} = {values}"
-                self.pos_text_pair.append([v['center'],text,v['index']])
+                self.pos_text_pair.append([v['center'],text,v['index'],"subregion"])
 
     ## ------------------------------------------------------------------------- ##
 
@@ -729,7 +732,7 @@ class Explorer:
                     if d1 < 1.5:
                         remove_bool = True
                 else:
-                    if d1 < 2:
+                    if d1 < 1.5:
                         remove_bool = True
 
                 # Remove frontiers that are too close to obstacles
@@ -1106,7 +1109,7 @@ class Explorer:
         text.scale.z=.5
         text.color=ColorRGBA(0,0,0,1)
         text.text=string
-        text.lifetime=rospy.Duration(5)
+        text.lifetime=rospy.Duration(10)
         self.info_pub.publish(text)
 
     def drawGlobalPath(self):

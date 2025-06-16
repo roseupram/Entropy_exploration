@@ -1,5 +1,5 @@
 <launch>
-  <arg name="method" value="HPHS"/>
+  <arg name="method" default="HPHS"/>
   <node pkg="visualization_tools" type="visualizationTools" name="visualizationTools" output="screen">
     <param name="metricFile" type="string" value="$(find HPHS)/log/$(arg method)/metrics" />
     <param name="trajFile" type="string" value="$(find HPHS)/log/$(arg method)/trajectory" />
